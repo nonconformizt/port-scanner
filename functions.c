@@ -1,26 +1,34 @@
 #include "header.h"
 
 
-
-void scan_host(struct in_addr target, int port_lo, int port_hi, int socket_fd);
+void * scan_host(void *arg);
 void * listen_host(void *target);
-void fatal_err(const char * msg);
-int parse_cidr(const char* cidr, struct in_addr* addr, struct in_addr* mask);
+void fatal_err(const char *msg);
+int parse_cidr(const char *cidr, struct in_addr* addr, struct in_addr* mask);
 void parse_args(int argc, char *argv[], struct in_addr *addr, int *port_lo, int *port_hi, int * num_hosts);
-void process_packet(unsigned char * buffer, int size, struct in_addr source_ip, struct in_addr dest_ip);
+void process_packet(unsigned char * buffer, int size, struct in_addr source_ip, struct in_addr dest_ip, int thread_index);
 const char* dotted_quad(const struct in_addr* addr);
 void prepare_datagram(char* datagram, struct iphdr* iph, struct tcphdr* tcph, struct in_addr dest_ip);
 void ip_to_host(const char* ip, char* buffer);
 void get_local_ip(char* buffer);
 unsigned short check_sum(unsigned short* ptr, int nbytes);
+void fill_thread_arg(struct thread_arg * arg, struct in_addr target, int port_lo, int port_hi, int socket_fd, int index);
 
 
 
-void scan_host(struct in_addr target, int port_lo, int port_hi, int socket_fd)
+void * scan_host(void * arg)
 {    
+    struct thread_arg * thr_arg = (struct thread_arg*) arg;
+    struct in_addr target = thr_arg->target;
+
+    // make arguments for listening thread
+    struct listen_host_arg lh_arg = {
+        thr_arg->index, 
+        &thr_arg->target
+    };
     // create thread for listening 
     pthread_t listen_thread;
-    pthread_create(&listen_thread, NULL, listen_host, (void *)(&target));
+    pthread_create(&listen_thread, NULL, listen_host, (void *)(&lh_arg));
 
     char source_ip[INET6_ADDRSTRLEN];
     get_local_ip(source_ip);
@@ -36,7 +44,7 @@ void scan_host(struct in_addr target, int port_lo, int port_hi, int socket_fd)
 
 
     // for each port generate and send packets from port_lo to port_hi
-    for (int port = port_lo; port <= port_hi; port++)
+    for (int port = thr_arg->port_lo; port <= thr_arg->port_hi; port++)
     {
         struct sockaddr_in dest;
         struct pseudo_header psh;
@@ -57,7 +65,7 @@ void scan_host(struct in_addr target, int port_lo, int port_hi, int socket_fd)
 
         tcph->check = check_sum((unsigned short*)&psh, sizeof(struct pseudo_header));
 
-        if (sendto(socket_fd, datagram, sizeof(struct iphdr) + sizeof(struct tcphdr), 0, (struct sockaddr*)&dest, sizeof(dest)) < 0)
+        if (sendto(thr_arg->socket_fd, datagram, sizeof(struct iphdr) + sizeof(struct tcphdr), 0, (struct sockaddr*)&dest, sizeof(dest)) < 0)
             fatal_err("Error sending syn packet!");
 
     }
@@ -68,9 +76,10 @@ void scan_host(struct in_addr target, int port_lo, int port_hi, int socket_fd)
     printf("\n");
 }
 
-void * listen_host(void* target)
+void * listen_host(void* _arg)
 {
-    struct in_addr * target_in = (struct in_addr*) target;
+    struct listen_host_arg * arg = (struct listen_host_arg*) _arg;
+    struct in_addr * target_in = arg->target_in;
     unsigned char* buffer = (unsigned char*) malloc(BUF_SIZE);
 
     socklen_t saddr_size, data_size;
@@ -81,8 +90,6 @@ void * listen_host(void* target)
     if (sock_raw < 0) 
         fatal_err("Cannot create listening socket!");
 
-
-    printf("%s Open ports: ", inet_ntoa(*target_in));
 
     /** 
      * The ideal approach is to wait
@@ -98,8 +105,10 @@ void * listen_host(void* target)
         if (data_size < 0)
             fatal_err("Recvfrom error, failed to get packets!");
         
-        process_packet(buffer, data_size, saddr.sin_addr, *target_in);
+        process_packet(buffer, data_size, saddr.sin_addr, *target_in, arg->index);
     }
+
+
 
 }
 
@@ -199,7 +208,8 @@ void process_packet(
     unsigned char * buffer, 
     int size, 
     struct in_addr source_ip, 
-    struct in_addr dest_ip)
+    struct in_addr dest_ip, 
+    int thread_index)
 {
     struct iphdr* iph = (struct iphdr*) buffer; // IP Header part of this packet
     unsigned short iphdrlen;
@@ -207,6 +217,9 @@ void process_packet(
     memset(&dest, 0, sizeof(dest));
     memset(&source, 0, sizeof(source));
 
+
+    sprintf(results[thread_index], "%s Open ports: ", inet_ntoa(source_ip));
+    char tmp[1024];
 
     if (iph->protocol == 6) 
     {        
@@ -216,12 +229,15 @@ void process_packet(
         struct tcphdr* tcph = (struct tcphdr*)(buffer + iphdrlen);
 
         source.sin_addr.s_addr = iph->saddr;
-
         dest.sin_addr.s_addr = iph->daddr;
 
         if (tcph->syn == 1 && tcph->ack == 1 && source.sin_addr.s_addr == dest_ip.s_addr) {
-            printf("%d ", ntohs(tcph->source));
-            fflush(stdout);
+            // sprintf(results[thread_index], "Hello motherfuckers!\n");
+            sprintf(tmp, "%d ", tcph->source);
+            printf("%d ", tcph->source);
+            // printf("%s ", tmp);
+            strcat(results[thread_index], tmp);
+            // fflush(stdout);
         }
     }
 }
@@ -351,4 +367,14 @@ unsigned short check_sum(unsigned short* ptr, int nbytes)
     answer = (short)~sum;
 
     return answer;
+}
+
+
+void fill_thread_arg(struct thread_arg * arg, struct in_addr target, int port_lo, int port_hi, int socket_fd, int index)
+{
+    arg->target = target;
+    arg->port_lo = port_lo;
+    arg->port_hi = port_hi;
+    arg->socket_fd = socket_fd;
+    arg->index = index;
 }

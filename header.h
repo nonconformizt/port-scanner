@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <ctype.h>
+#include <time.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -30,7 +31,21 @@
 // how long to wait for host to respond
 #define WAIT_TIMEOUT 3
 
-struct pseudo_header { //Needed for checksum calculation
+struct thread_arg {
+    struct in_addr target;
+    int port_lo,
+        port_hi,
+        socket_fd,
+        index;
+};
+
+struct listen_host_arg {
+    int index;
+    struct in_addr * target_in;
+};
+
+// needed for checksum calculation
+struct pseudo_header { 
     unsigned int source_address;
     unsigned int dest_address;
     unsigned char placeholder;
@@ -39,5 +54,7 @@ struct pseudo_header { //Needed for checksum calculation
 
     struct tcphdr tcp;
 };
+
+char ** results;
 
 #endif // HEADER
