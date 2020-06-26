@@ -40,4 +40,17 @@ struct pseudo_header { //Needed for checksum calculation
     struct tcphdr tcp;
 };
 
+// Global variables
+int socket_fd,
+    port_lo,
+    port_hi;
+
+
+// Stack for unresolved ip-adresses
+struct in_addr * stack; // array of addresses
+int stack_size;
+int stack_top;
+
+
+
 #endif // HEADER

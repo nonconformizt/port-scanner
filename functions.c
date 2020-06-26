@@ -1,12 +1,10 @@
 #include "header.h"
 
-
-
 void scan_host(struct in_addr target, int port_lo, int port_hi, int socket_fd);
 void * listen_host(void *target);
 void fatal_err(const char * msg);
 int parse_cidr(const char* cidr, struct in_addr* addr, struct in_addr* mask);
-void parse_args(int argc, char *argv[], struct in_addr *addr, int *port_lo, int *port_hi, int * num_hosts);
+void parse_args(int argc, char *argv[], struct in_addr *addr, int * num_hosts);
 void process_packet(unsigned char * buffer, int size, struct in_addr source_ip, struct in_addr dest_ip);
 const char* dotted_quad(const struct in_addr* addr);
 void prepare_datagram(char* datagram, struct iphdr* iph, struct tcphdr* tcph, struct in_addr dest_ip);
@@ -14,6 +12,8 @@ void ip_to_host(const char* ip, char* buffer);
 void get_local_ip(char* buffer);
 unsigned short check_sum(unsigned short* ptr, int nbytes);
 
+// stack functions
+void fill_stack(struct in_addr start, int num_hosts);
 
 
 void scan_host(struct in_addr target, int port_lo, int port_hi, int socket_fd)
@@ -129,11 +129,7 @@ int parse_cidr(const char* cidr, struct in_addr* addr, struct in_addr* mask)
 /**
  * Parse command-line arguments
  */
-void parse_args(
-    int argc, char * argv[], 
-    struct in_addr *addr, 
-    int *port_lo, int *port_hi,
-    int * num_hosts)
+void parse_args(int argc, char * argv[], struct in_addr *addr, int * num_hosts)
 {
 
     if (argc <= 1)
@@ -171,22 +167,22 @@ void parse_args(
 
     if (argc <= 2) {
         // port range not specified
-        *port_lo = PORT_LO;
-        *port_hi = PORT_HI;
+        port_lo = PORT_LO;
+        port_hi = PORT_HI;
     }
     else {
         char *ptr = strtok(argv[2], "-");
         if (ptr == NULL)
             fatal_err("Invalid port!");
-        *port_lo = abs(atoi(ptr));
+        port_lo = abs(atoi(ptr));
         ptr = strtok(NULL, "-");
         if (ptr == NULL)
             fatal_err("Invalid port!");
-        *port_hi = abs(atoi(ptr));
-        if (*port_hi < *port_lo) {
-            int tmp = *port_lo;
-            *port_lo = *port_hi;
-            *port_hi = tmp;
+        port_hi = abs(atoi(ptr));
+        if (port_hi < port_lo) {
+            int tmp = port_lo;
+            port_lo = port_hi;
+            port_hi = tmp;
         }
     }
 
@@ -351,4 +347,31 @@ unsigned short check_sum(unsigned short* ptr, int nbytes)
     answer = (short)~sum;
 
     return answer;
+}
+
+
+void fill_stack(struct in_addr start, int num_hosts)
+{
+    stack_size = num_hosts;
+    stack = malloc(stack_size * sizeof(struct in_addr));
+    stack_top = stack_size - 1;
+    memset(stack, 0, stack_size * sizeof(struct in_addr));
+
+    for (int i = 0; i < num_hosts; i++)
+    {
+        stack[i] = start;
+        start.s_addr = htonl(ntohl(start.s_addr) + 1);
+    }
+}
+
+struct in_addr pop_stack()
+{
+    struct in_addr addr;
+    if (stack_top != -1) {
+        addr = stack[stack_top];
+        stack_top--;
+    } else {
+        fatal_err("Stack is empty!");
+    }
+    return addr;
 }

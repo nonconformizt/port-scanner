@@ -7,11 +7,9 @@ int main (int argc, char * argv[])
     struct in_addr addr;
     int port_lo, port_hi, num_hosts;
 
-    parse_args(argc, argv, &addr, &port_lo, &port_hi, &num_hosts);
+    parse_args(argc, argv, &addr, &num_hosts);
 
-    printf("Num: %d\n", num_hosts);
-
-    int socket_fd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+    socket_fd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
     if (socket_fd < 0)
         fatal_err("Error creating socket!");
 
