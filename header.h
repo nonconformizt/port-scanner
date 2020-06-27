@@ -30,6 +30,9 @@
 // how long to wait for host to respond
 #define WAIT_TIMEOUT 3
 
+// default string length
+#define STR_SIZE 1024
+
 struct pseudo_header { //Needed for checksum calculation
     unsigned int source_address;
     unsigned int dest_address;
@@ -47,6 +50,7 @@ int socket_fd,
 
 
 // Stack for unresolved ip-adresses
+pthread_mutex_t stack_lock;
 struct in_addr * stack; // array of addresses
 int stack_size;
 int stack_top;

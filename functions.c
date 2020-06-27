@@ -1,11 +1,11 @@
 #include "header.h"
 
-void scan_host(struct in_addr target, int port_lo, int port_hi, int socket_fd);
+void * scan_host();
 void * listen_host(void *target);
 void fatal_err(const char * msg);
 int parse_cidr(const char* cidr, struct in_addr* addr, struct in_addr* mask);
 void parse_args(int argc, char *argv[], struct in_addr *addr, int * num_hosts);
-void process_packet(unsigned char * buffer, int size, struct in_addr source_ip, struct in_addr dest_ip);
+void process_packet(unsigned char * buffer, int size, struct in_addr source_ip, struct in_addr dest_ip, char *output);
 const char* dotted_quad(const struct in_addr* addr);
 void prepare_datagram(char* datagram, struct iphdr* iph, struct tcphdr* tcph, struct in_addr dest_ip);
 void ip_to_host(const char* ip, char* buffer);
@@ -14,10 +14,18 @@ unsigned short check_sum(unsigned short* ptr, int nbytes);
 
 // stack functions
 void fill_stack(struct in_addr start, int num_hosts);
+struct in_addr pop_stack();
 
 
-void scan_host(struct in_addr target, int port_lo, int port_hi, int socket_fd)
-{    
+
+void * scan_host()
+{   
+    struct in_addr target;
+    // if address stack is not empty, 
+    // retrieve adderess from it
+    if (stack_top != -1)
+        target = pop_stack();
+
     // create thread for listening 
     pthread_t listen_thread;
     pthread_create(&listen_thread, NULL, listen_host, (void *)(&target));
@@ -62,16 +70,27 @@ void scan_host(struct in_addr target, int port_lo, int port_hi, int socket_fd)
 
     }
 
+    /** 
+     * The ideal approach is to wait
+     * until timeout OR until we receive responce
+     * from ALL requested ports of target 
+     * 
+     * BUT here I will just kill the thread after timeout
+     */
+
     sleep(WAIT_TIMEOUT);
     pthread_cancel(listen_thread); 
 
     printf("\n");
+
+    return NULL;
 }
 
 void * listen_host(void* target)
 {
     struct in_addr * target_in = (struct in_addr*) target;
     unsigned char* buffer = (unsigned char*) malloc(BUF_SIZE);
+    unsigned char* result = (unsigned char*) malloc(STR_SIZE);
 
     socklen_t saddr_size, data_size;
     struct sockaddr_in saddr;
@@ -82,15 +101,7 @@ void * listen_host(void* target)
         fatal_err("Cannot create listening socket!");
 
 
-    printf("%s Open ports: ", inet_ntoa(*target_in));
-
-    /** 
-     * The ideal approach is to wait
-     * until timeout OR until we receive responce
-     * from ALL requested ports of target 
-     * 
-     * BUT here I will just kill the thread after timeout
-     */
+    sprintf(result, "%s Open ports: ", inet_ntoa(*target_in));
 
     while(1)
     {
@@ -98,9 +109,10 @@ void * listen_host(void* target)
         if (data_size < 0)
             fatal_err("Recvfrom error, failed to get packets!");
         
-        process_packet(buffer, data_size, saddr.sin_addr, *target_in);
+        process_packet(buffer, data_size, saddr.sin_addr, *target_in, result);
     }
 
+    return NULL;
 }
 
 
@@ -192,10 +204,11 @@ void parse_args(int argc, char * argv[], struct in_addr *addr, int * num_hosts)
   Method to process incoming packets and look for Ack replies
 */
 void process_packet(
-    unsigned char * buffer, 
+    unsigned char *buffer, 
     int size, 
     struct in_addr source_ip, 
-    struct in_addr dest_ip)
+    struct in_addr dest_ip,
+    char *output)
 {
     struct iphdr* iph = (struct iphdr*) buffer; // IP Header part of this packet
     unsigned short iphdrlen;
@@ -216,7 +229,7 @@ void process_packet(
         dest.sin_addr.s_addr = iph->daddr;
 
         if (tcph->syn == 1 && tcph->ack == 1 && source.sin_addr.s_addr == dest_ip.s_addr) {
-            printf("%d ", ntohs(tcph->source));
+            sprintf(output, "%s %d ", output, ntohs(tcph->source));
             fflush(stdout);
         }
     }
@@ -349,9 +362,18 @@ unsigned short check_sum(unsigned short* ptr, int nbytes)
     return answer;
 }
 
-
+/**
+ * Init stack and mutex,then fill stack 
+ * with adresses to scan
+ * 
+ * Note: smaller ip's will be on top,
+ *       bigger ones on bottom
+ */
 void fill_stack(struct in_addr start, int num_hosts)
 {
+    if (pthread_mutex_init(&stack_lock, NULL) != 0)
+        fatal_err("Error creating mutex");
+
     stack_size = num_hosts;
     stack = malloc(stack_size * sizeof(struct in_addr));
     stack_top = stack_size - 1;
@@ -366,12 +388,15 @@ void fill_stack(struct in_addr start, int num_hosts)
 
 struct in_addr pop_stack()
 {
+    pthread_mutex_lock(&stack_lock);
+
     struct in_addr addr;
     if (stack_top != -1) {
         addr = stack[stack_top];
         stack_top--;
-    } else {
+    } else
         fatal_err("Stack is empty!");
-    }
+
+    pthread_mutex_unlock(&stack_lock);
     return addr;
 }
