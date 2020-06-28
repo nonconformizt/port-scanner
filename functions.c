@@ -1,8 +1,8 @@
 #include "header.h"
 
 void * scan_host();
-void * listen_host(void *target);
-void fatal_err(const char * msg);
+void * listen_host(void *_arg);
+void fatal_err(const char *msg);
 int parse_cidr(const char* cidr, struct in_addr* addr, struct in_addr* mask);
 void parse_args(int argc, char *argv[], struct in_addr *addr, int * num_hosts);
 void process_packet(unsigned char * buffer, int size, struct in_addr source_ip, struct in_addr dest_ip, char *output);
@@ -21,76 +21,79 @@ struct in_addr pop_stack();
 void * scan_host()
 {   
     struct in_addr target;
-    // if address stack is not empty, 
-    // retrieve adderess from it
-    if (stack_top != -1)
+
+    // do job while stack is not empty
+    while (true) {
         target = pop_stack();
+        if (target.s_addr == -1)
+            return NULL;
 
-    // create thread for listening 
-    pthread_t listen_thread;
-    pthread_create(&listen_thread, NULL, listen_host, (void *)(&target));
+        // create thread for listening 
+        pthread_t listen_thread;
+        struct listen_thr_arg l_arg = {false, target};
+        pthread_create(&listen_thread, NULL, listen_host, (void *)(&l_arg));
 
-    char source_ip[INET6_ADDRSTRLEN];
-    get_local_ip(source_ip);
+        char source_ip[INET6_ADDRSTRLEN];
+        get_local_ip(source_ip);
 
-    struct in_addr dest_ip;
-    dest_ip.s_addr = inet_addr(dotted_quad(&target));
-    
-    char datagram[DATAGRAM_SIZE];
-    struct iphdr* iph = (struct iphdr*)datagram; //IP header
-    struct tcphdr* tcph = (struct tcphdr*)(datagram + sizeof(struct ip)); //TCP header
+        struct in_addr dest_ip;
+        dest_ip.s_addr = inet_addr(dotted_quad(&target));
+        
+        char datagram[DATAGRAM_SIZE];
+        struct iphdr* iph = (struct iphdr*)datagram; //IP header
+        struct tcphdr* tcph = (struct tcphdr*)(datagram + sizeof(struct ip)); //TCP header
 
-    prepare_datagram(datagram, iph, tcph, dest_ip);
+        prepare_datagram(datagram, iph, tcph, dest_ip);
 
 
-    // for each port generate and send packets from port_lo to port_hi
-    for (int port = port_lo; port <= port_hi; port++)
-    {
-        struct sockaddr_in dest;
-        struct pseudo_header psh;
+        // for each port generate and send packets from port_lo to port_hi
+        for (int port = port_lo; port <= port_hi; port++)
+        {
+            struct sockaddr_in dest;
+            struct pseudo_header psh;
 
-        dest.sin_family = AF_INET;
-        dest.sin_addr.s_addr = dest_ip.s_addr;
+            dest.sin_family = AF_INET;
+            dest.sin_addr.s_addr = dest_ip.s_addr;
 
-        tcph->dest = htons(port);
-        tcph->check = 0;
+            tcph->dest = htons(port);
+            tcph->check = 0;
 
-        psh.source_address = inet_addr(source_ip);
-        psh.dest_address = dest.sin_addr.s_addr;
-        psh.placeholder = 0;
-        psh.protocol = IPPROTO_TCP;
-        psh.tcp_length = htons(sizeof(struct tcphdr));
+            psh.source_address = inet_addr(source_ip);
+            psh.dest_address = dest.sin_addr.s_addr;
+            psh.placeholder = 0;
+            psh.protocol = IPPROTO_TCP;
+            psh.tcp_length = htons(sizeof(struct tcphdr));
 
-        memcpy(&psh.tcp, tcph, sizeof(struct tcphdr));
+            memcpy(&psh.tcp, tcph, sizeof(struct tcphdr));
 
-        tcph->check = check_sum((unsigned short*)&psh, sizeof(struct pseudo_header));
+            tcph->check = check_sum((unsigned short*)&psh, sizeof(struct pseudo_header));
 
-        if (sendto(socket_fd, datagram, sizeof(struct iphdr) + sizeof(struct tcphdr), 0, (struct sockaddr*)&dest, sizeof(dest)) < 0)
-            fatal_err("Error sending syn packet!");
+            if (sendto(socket_fd, datagram, sizeof(struct iphdr) + sizeof(struct tcphdr), 0, (struct sockaddr*)&dest, sizeof(dest)) < 0)
+                fatal_err("Error sending syn packet!");
+        }
+
+        /** 
+         * The ideal approach is to wait
+         * until timeout OR until we receive responce
+         * from ALL requested ports of target 
+         * 
+         * BUT here I will just stop the thread after timeout
+         */
+
+        sleep(WAIT_TIMEOUT);
+        l_arg.stop = true;
+        pthread_join(listen_thread, NULL);
 
     }
-
-    /** 
-     * The ideal approach is to wait
-     * until timeout OR until we receive responce
-     * from ALL requested ports of target 
-     * 
-     * BUT here I will just kill the thread after timeout
-     */
-
-    sleep(WAIT_TIMEOUT);
-    pthread_cancel(listen_thread); 
-
-    printf("\n");
 
     return NULL;
 }
 
-void * listen_host(void* target)
+void * listen_host(void* _arg)
 {
-    struct in_addr * target_in = (struct in_addr*) target;
+    struct listen_thr_arg *arg = _arg;
     unsigned char* buffer = (unsigned char*) malloc(BUF_SIZE);
-    unsigned char* result = (unsigned char*) malloc(STR_SIZE);
+    char* result = (char*) malloc(STR_SIZE);
 
     socklen_t saddr_size, data_size;
     struct sockaddr_in saddr;
@@ -101,17 +104,21 @@ void * listen_host(void* target)
         fatal_err("Cannot create listening socket!");
 
 
-    sprintf(result, "%s Open ports: ", inet_ntoa(*target_in));
+    sprintf(result, "%s Open ports: ", inet_ntoa(arg->target));
 
-    while(1)
+    while(!arg->stop)
     {
         data_size = recvfrom(sock_raw, buffer, BUF_SIZE, 0, (struct sockaddr*) &saddr, &saddr_size);
         if (data_size < 0)
             fatal_err("Recvfrom error, failed to get packets!");
         
-        process_packet(buffer, data_size, saddr.sin_addr, *target_in, result);
+        process_packet(buffer, data_size, saddr.sin_addr, arg->target, result);
     }
 
+    printf("%s\n", result);
+    fflush(stdout); // just in case...
+
+    close(sock_raw);
     return NULL;
 }
 
@@ -230,7 +237,6 @@ void process_packet(
 
         if (tcph->syn == 1 && tcph->ack == 1 && source.sin_addr.s_addr == dest_ip.s_addr) {
             sprintf(output, "%s %d ", output, ntohs(tcph->source));
-            fflush(stdout);
         }
     }
 }
@@ -395,7 +401,7 @@ struct in_addr pop_stack()
         addr = stack[stack_top];
         stack_top--;
     } else
-        fatal_err("Stack is empty!");
+        addr.s_addr = -1;
 
     pthread_mutex_unlock(&stack_lock);
     return addr;

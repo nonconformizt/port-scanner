@@ -24,20 +24,15 @@ int main (int argc, char * argv[])
 
 
     // create working threads
-    pthread_t threads[num_hosts];
+    int num_threads = (num_hosts > MAX_THREADS) ? MAX_THREADS : num_hosts;
+    pthread_t threads[num_threads];
 
-    for (int i = 0; i < num_hosts; i++)
-    {
+    for (int i = 0; i < num_threads; i++)
         pthread_create(&threads[i], NULL, scan_host, NULL);
-    }
 
-    for (int i = 0; i < num_hosts; i++)
-    {
+    for (int i = 0; i < num_threads; i++)
         pthread_join(threads[i], NULL);
-    }
 
-
-    scan_host();
-
+    close(socket_fd);
 }
 

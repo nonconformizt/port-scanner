@@ -19,21 +19,46 @@
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 
 #define PORT_LO 1 
 #define PORT_HI 65535 
-
 #define BUF_SIZE 65536
 #define DATAGRAM_SIZE 4096
-
-// how long to wait for host to respond
+// How long to wait for host to respond
 #define WAIT_TIMEOUT 3
-
-// default string length
+// Default string length
 #define STR_SIZE 1024
+// Maximum number of threads
+#define MAX_THREADS 5
 
-struct pseudo_header { //Needed for checksum calculation
+
+// Global variables
+int socket_fd,
+    port_lo,
+    port_hi;
+// Array of stop flags for listening threads
+bool *should_stop; 
+
+
+// Stack for unresolved ip-adresses
+pthread_mutex_t stack_lock;
+struct in_addr * stack; // array of addresses
+int stack_size;
+int stack_top;
+
+
+// Listening thread arguments
+struct listen_thr_arg
+{
+    bool stop;
+    struct in_addr target;
+};
+
+
+// Needed for checksum calculation
+struct pseudo_header {
     unsigned int source_address;
     unsigned int dest_address;
     unsigned char placeholder;
@@ -42,18 +67,6 @@ struct pseudo_header { //Needed for checksum calculation
 
     struct tcphdr tcp;
 };
-
-// Global variables
-int socket_fd,
-    port_lo,
-    port_hi;
-
-
-// Stack for unresolved ip-adresses
-pthread_mutex_t stack_lock;
-struct in_addr * stack; // array of addresses
-int stack_size;
-int stack_top;
 
 
 
