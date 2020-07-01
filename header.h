@@ -21,6 +21,8 @@
 #include <unistd.h>
 #include <stdbool.h>
 
+#include "port_association.h"
+
 
 #define PORT_LO 1 
 #define PORT_HI 65535 
@@ -34,13 +36,16 @@
 #define MAX_THREADS 5
 
 
-// Global variables
+
+/**
+ * Global variables
+ */
+
 int socket_fd,
     port_lo,
     port_hi;
-// Array of stop flags for listening threads
-bool *should_stop; 
-
+// Services detection
+bool detection_enabled;
 
 // Stack for unresolved ip-adresses
 pthread_mutex_t stack_lock;
@@ -49,13 +54,17 @@ int stack_size;
 int stack_top;
 
 
+/**
+ * Structures
+ */
+
 // Listening thread arguments
 struct listen_thr_arg
 {
     bool stop;
+    int sock_raw;
     struct in_addr target;
 };
-
 
 // Needed for checksum calculation
 struct pseudo_header {

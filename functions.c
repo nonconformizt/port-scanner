@@ -22,6 +22,15 @@ void * scan_host()
 {   
     struct in_addr target;
 
+    // create raw listening socket
+    int listen_sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+    if (listen_sock < 0) 
+        fatal_err("Cannot create listening socket!");
+    // set timeout for socket for 2 sec
+    struct timeval tv = {2, 0};
+    setsockopt(listen_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+
     // do job while stack is not empty
     while (true) {
         target = pop_stack();
@@ -30,7 +39,7 @@ void * scan_host()
 
         // create thread for listening 
         pthread_t listen_thread;
-        struct listen_thr_arg l_arg = {false, target};
+        struct listen_thr_arg l_arg = {false, listen_sock, target};
         pthread_create(&listen_thread, NULL, listen_host, (void *)(&l_arg));
 
         char source_ip[INET6_ADDRSTRLEN];
@@ -40,13 +49,13 @@ void * scan_host()
         dest_ip.s_addr = inet_addr(dotted_quad(&target));
         
         char datagram[DATAGRAM_SIZE];
-        struct iphdr* iph = (struct iphdr*)datagram; //IP header
-        struct tcphdr* tcph = (struct tcphdr*)(datagram + sizeof(struct ip)); //TCP header
+        struct iphdr* iph = (struct iphdr*) datagram; // IP header
+        struct tcphdr* tcph = (struct tcphdr*)(datagram + sizeof(struct ip)); // TCP header
 
         prepare_datagram(datagram, iph, tcph, dest_ip);
 
 
-        // for each port generate and send packets from port_lo to port_hi
+        // For each port generate and send packets from port_lo to port_hi
         for (int port = port_lo; port <= port_hi; port++)
         {
             struct sockaddr_in dest;
@@ -83,9 +92,9 @@ void * scan_host()
         sleep(WAIT_TIMEOUT);
         l_arg.stop = true;
         pthread_join(listen_thread, NULL);
-
     }
 
+    close(listen_sock);
     return NULL;
 }
 
@@ -98,17 +107,11 @@ void * listen_host(void* _arg)
     socklen_t saddr_size, data_size;
     struct sockaddr_in saddr;
 
-    // create listening raw socket
-    int sock_raw = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
-    if (sock_raw < 0) 
-        fatal_err("Cannot create listening socket!");
-
-
     sprintf(result, "%s Open ports: ", inet_ntoa(arg->target));
 
     while(!arg->stop)
     {
-        data_size = recvfrom(sock_raw, buffer, BUF_SIZE, 0, (struct sockaddr*) &saddr, &saddr_size);
+        data_size = recvfrom(arg->sock_raw, buffer, BUF_SIZE, 0, (struct sockaddr*) &saddr, &saddr_size);
         if (data_size < 0)
             fatal_err("Recvfrom error, failed to get packets!");
         
@@ -116,9 +119,8 @@ void * listen_host(void* _arg)
     }
 
     printf("%s\n", result);
-    fflush(stdout); // just in case...
+    fflush(stdout);
 
-    close(sock_raw);
     return NULL;
 }
 
@@ -150,7 +152,6 @@ int parse_cidr(const char* cidr, struct in_addr* addr, struct in_addr* mask)
  */
 void parse_args(int argc, char * argv[], struct in_addr *addr, int * num_hosts)
 {
-
     if (argc <= 1)
         fatal_err("Too few arguments!");
     
@@ -184,7 +185,7 @@ void parse_args(int argc, char * argv[], struct in_addr *addr, int * num_hosts)
     }
 
 
-    if (argc <= 2) {
+    if (argc < 3) {
         // port range not specified
         port_lo = PORT_LO;
         port_hi = PORT_HI;
@@ -204,6 +205,13 @@ void parse_args(int argc, char * argv[], struct in_addr *addr, int * num_hosts)
             port_hi = tmp;
         }
     }
+
+    if (argc == 4)
+        if (strcmp(argv[3], "-d") == 0)
+            detection_enabled = true;
+        else fatal_err("Unknown parameters!");
+    else 
+        detection_enabled = false;
 
 }
 
@@ -235,8 +243,23 @@ void process_packet(
 
         dest.sin_addr.s_addr = iph->daddr;
 
-        if (tcph->syn == 1 && tcph->ack == 1 && source.sin_addr.s_addr == dest_ip.s_addr) {
-            sprintf(output, "%s %d ", output, ntohs(tcph->source));
+        if (tcph->syn == 1 && tcph->ack == 1 
+            && source.sin_addr.s_addr == dest_ip.s_addr) 
+        {
+            int port = ntohs(tcph->source);
+            
+            if (detection_enabled) {
+                if (port < TBL_SIZE) // Known port
+                {
+                    if (port_assoc[port])
+                        sprintf(output, "%s\n%s port (%d) is open", output, port_assoc[port], port);
+                    else 
+                        sprintf(output, "%s\nPort %d is open", output, port);
+                } else 
+                    sprintf(output, "%s\nPort %d is open", output, port);
+            } else {
+                sprintf(output, "%s  %d ", output, port);
+            }
         }
     }
 }

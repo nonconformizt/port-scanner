@@ -9,6 +9,9 @@ int main (int argc, char * argv[])
 
     parse_args(argc, argv, &addr, &num_hosts);
 
+    if (detection_enabled)
+        fill_port_assoc();
+
     fill_stack(addr, num_hosts);
 
     socket_fd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
